@@ -1,15 +1,17 @@
+include { CHECK_CLEANLINESS } from '../../modules/local/getRPF/check_cleanliness/main'
 
-
-// Include the necessary modules for this workflow
-include { FASTQC } from '../../modules/local/fastqc.nf'
-
-workflow quality_control {
+workflow QUALITY_CONTROL {
     take:
-        fastq
+    samples  // channel: [meta, input_file]
 
     main:
-        fastqc_ch   =   FASTQC(fastq)
-    
+    ch_versions = Channel.empty()
+
+    // Cleanliness check
+    CHECK_CLEANLINESS(samples, params.collapsed_read_header_pattern)
+    ch_versions = ch_versions.mix(CHECK_CLEANLINESS.out.versions)
+
     emit:
-        fastqc_ch
+    clean_samples = samples                                             // channel: [meta, file]
+    versions      = ch_versions                                         // channel: [versions.yml]
 }

@@ -3,14 +3,11 @@
 /// Specify to use Nextflow DSL version 2
 nextflow.enable.dsl=2
 
-/// Import modules and subworkflows
-include { quality_control } from './subworkflows/local/quality_control.nf'
-include { fetch_data } from './subworkflows/local/fetch_data.nf'
-include { preprocessing } from './subworkflows/local/preprocessing.nf'
-include { trips_RiboSeq } from './subworkflows/local/trips.nf'
-include { gwips_RiboSeq } from './subworkflows/local/gwips.nf'
-
-include { BOWTIE_RRNA } from './modules/local/bowtie.nf'
+include { DATA_ACQUISITION } from './subworkflows/local/data_acquisition'
+include { QUALITY_CONTROL } from './subworkflows/local/quality_control'
+include { ALIGNMENT } from './subworkflows/local/alignment'
+include { POST_PROCESSING } from './subworkflows/local/post_processing'
+include { ANALYSIS } from './subworkflows/local/analysis'
 
 // Log the parameters
 log.info """\
@@ -21,9 +18,8 @@ log.info """\
 ||  Parameters                                                             
 =+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=
 ||  Sample Sheet    : ${params.sample_sheet}                                     
-||  outDir          : ${params.output_dir}                                        
-||  workDir         : ${workflow.workDir}   
-||  study_dir       : ${params.study_dir}                                     
+||  outDir          : ${params.outdir}                                        
+||  workDir         : ${workflow.workDir}                             
 =+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=
 
 """
@@ -43,28 +39,33 @@ def help() {
 """.stripIndent()
 }
 
+
 workflow {
-    samples_ch  =   Channel
-                        .fromPath(params.sample_sheet)
-                        .splitCsv(header: true, sep: ',')
-                        .map { row -> tuple("${row.study_accession}", "${row.Run}", "${row.ScientificName}", "${row.LIBRARYTYPE}")}
+    // Data Acquisition
+    DATA_ACQUISITION(params.sample_sheet)
 
+    // Quality Control
+    QUALITY_CONTROL(DATA_ACQUISITION.out.samples)
 
-    fetch_data_ch           =   fetch_data(samples_ch)
+    // Alignment (only for samples that passed QC)
+    ALIGNMENT(
+        QUALITY_CONTROL.out.clean_samples,
+        params.star_index,
+        params.bowtie_index,
+        params.rRNA_index,
+        params.gtf
+        )
 
-    collapsed_fastq_ch      =   preprocessing(fetch_data_ch.fastq_ch, samples_ch)
-    // if ( params.skip_rRNA ) {
-    //     if ( params.skip_rRNA == false ) {
-    //         less_rRNA_ch          =   BOWTIE_RRNA     ( collapsed_fastq_ch )
-    //     }
-    // }
-    less_rRNA_ch          =   BOWTIE_RRNA     ( collapsed_fastq_ch )
-    if ( params.skip_gwips == false ) {
-        gwips_RiboSeq(less_rRNA_ch.fastq_less_rRNA)
-    }
-    if ( params.skip_trips == false ) {
-        trips_RiboSeq(less_rRNA_ch.fastq_less_rRNA)
-    }
+    // Post-processing
+    POST_PROCESSING(
+        ALIGNMENT.out.transcriptome_bam,
+        ALIGNMENT.out.genome_bam,
+        params.annotation_sqlite,
+        params.chrom_sizes_file
+    )
+
+    // Analysis
+    ANALYSIS(ALIGNMENT.out.transcriptome_bam, params.ribometric_annotation)
 }
 
 workflow.onComplete {
